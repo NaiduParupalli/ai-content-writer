@@ -1,0 +1,9 @@
+# AI Content Writer Backend Configuration
+# Environment: Development
+
+# Debug Mode - Helpful for understanding Spring Boot initialization
+spring.main.web-application-type=reactive
+debug=false
+
+# Application Information
+spring.application.name=ai-content-writer
