@@ -1,22 +1,21 @@
 package contentwriter.service;
 
-import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 import reactor.core.publisher.Mono;
 
+import java.util.List;
 import java.util.Map;
 
 @Service
-@RequiredArgsConstructor
 public class OllamaAIService implements AIService {
 
     private final RestClient restClient = RestClient.builder()
-            .baseUrl("http://localhost:11434")
+            .baseUrl("https://generativelanguage.googleapis.com/v1beta")
             .build();
 
-    private final String model = "llama3.2";
+    private final String model = "gemini-2.0-flash";
 
     @Override
     public Mono<String> generate(
@@ -38,22 +37,97 @@ public class OllamaAIService implements AIService {
 
         return Mono.fromCallable(() -> {
 
+            String apiKey = System.getenv("GEMINI_API_KEY");
+
+            if (apiKey == null || apiKey.isBlank()) {
+                throw new RuntimeException(
+                        "GEMINI_API_KEY is not configured"
+                );
+            }
+
+            Map<String, Object> requestBody = Map.of(
+                    "contents", List.of(
+                            Map.of(
+                                    "parts", List.of(
+                                            Map.of(
+                                                    "text", prompt
+                                            )
+                                    )
+                            )
+                    )
+            );
+
             Map<?, ?> response = restClient.post()
-                    .uri("/api/generate")
+                    .uri(uriBuilder -> uriBuilder
+                            .path("/models/" + model + ":generateContent")
+                            .queryParam("key", apiKey)
+                            .build())
                     .contentType(MediaType.APPLICATION_JSON)
-                    .body(Map.of(
-                            "model", model,
-                            "prompt", prompt,
-                            "stream", false
-                    ))
+                    .body(requestBody)
                     .retrieve()
                     .body(Map.class);
 
-            if (response == null || response.get("response") == null) {
-                throw new RuntimeException("Ollama returned an empty response");
+            if (response == null) {
+                throw new RuntimeException(
+                        "Gemini returned an empty response"
+                );
             }
 
-            return response.get("response").toString();
+            Object candidatesObject = response.get("candidates");
+
+            if (!(candidatesObject instanceof List<?> candidates)
+                    || candidates.isEmpty()) {
+
+                throw new RuntimeException(
+                        "Gemini returned no candidates: " + response
+                );
+            }
+
+            Object candidateObject = candidates.get(0);
+
+            if (!(candidateObject instanceof Map<?, ?> candidate)) {
+                throw new RuntimeException(
+                        "Invalid Gemini response"
+                );
+            }
+
+            Object contentObject = candidate.get("content");
+
+            if (!(contentObject instanceof Map<?, ?> content)) {
+                throw new RuntimeException(
+                        "Gemini response does not contain content"
+                );
+            }
+
+            Object partsObject = content.get("parts");
+
+            if (!(partsObject instanceof List<?> parts)
+                    || parts.isEmpty()) {
+
+                throw new RuntimeException(
+                        "Gemini response does not contain parts"
+                );
+            }
+
+            Object partObject = parts.get(0);
+
+            if (!(partObject instanceof Map<?, ?> part)) {
+                throw new RuntimeException(
+                        "Invalid Gemini response part"
+                );
+            }
+
+            Object textObject = part.get("text");
+
+            if (textObject == null
+                    || textObject.toString().isBlank()) {
+
+                throw new RuntimeException(
+                        "Gemini returned empty content"
+                );
+            }
+
+            return textObject.toString();
         });
     }
 
@@ -91,9 +165,11 @@ public class OllamaAIService implements AIService {
                 Requirements:
                 - Write clear and useful content.
                 - Use simple English.
+                - Use professional Markdown formatting.
                 - Use headings where appropriate.
+                - Use bullet points where appropriate.
                 - Do not mention that you are an AI.
-                - Do not add unnecessary explanations about the prompt.
+                - Do not explain the prompt.
                 - Return only the final content.
                 """.formatted(
                 topic,
