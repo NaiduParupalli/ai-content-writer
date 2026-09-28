@@ -1,8 +1,10 @@
 package contentwriter.service;
 
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientResponseException;
 import reactor.core.publisher.Mono;
 
 import java.util.List;
@@ -16,6 +18,8 @@ public class OllamaAIService implements AIService {
             .build();
 
     private final String model = "gemini-3.8-flash";
+
+    private static final int MAX_RETRIES = 3;
 
     @Override
     public Mono<String> generate(
@@ -35,100 +39,165 @@ public class OllamaAIService implements AIService {
                 instructions
         );
 
-        return Mono.fromCallable(() -> {
+        return Mono.fromCallable(() -> generateWithRetry(prompt));
+    }
 
-            String apiKey = System.getenv("GEMINI_API_KEY");
+    private String generateWithRetry(String prompt) {
 
-            if (apiKey == null || apiKey.isBlank()) {
-                throw new RuntimeException(
-                        "GEMINI_API_KEY is not configured"
-                );
-            }
+        String apiKey = System.getenv("GEMINI_API_KEY");
 
-            Map<String, Object> requestBody = Map.of(
-                    "contents", List.of(
-                            Map.of(
-                                    "parts", List.of(
-                                            Map.of(
-                                                    "text", prompt
-                                            )
-                                    )
-                            )
-                    )
+        if (apiKey == null || apiKey.isBlank()) {
+            throw new RuntimeException(
+                    "GEMINI_API_KEY is not configured"
             );
+        }
 
-            Map<?, ?> response = restClient.post()
-                    .uri(uriBuilder -> uriBuilder
-                            .path("/models/" + model + ":generateContent")
-                            .queryParam("key", apiKey)
-                            .build())
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(requestBody)
-                    .retrieve()
-                    .body(Map.class);
+        Map<String, Object> requestBody = Map.of(
+                "contents", List.of(
+                        Map.of(
+                                "parts", List.of(
+                                        Map.of(
+                                                "text", prompt
+                                        )
+                                )
+                        )
+                )
+        );
 
-            if (response == null) {
+        for (int attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+
+            try {
+
+                Map<?, ?> response = restClient.post()
+                        .uri(uriBuilder -> uriBuilder
+                                .path("/models/" + model + ":generateContent")
+                                .queryParam("key", apiKey)
+                                .build())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body(requestBody)
+                        .retrieve()
+                        .body(Map.class);
+
+                return extractText(response);
+
+            } catch (RestClientResponseException ex) {
+
+                HttpStatusCode status = ex.getStatusCode();
+
+                System.out.println(
+                        "Gemini request failed. Attempt "
+                                + attempt
+                                + "/"
+                                + MAX_RETRIES
+                                + ". Status: "
+                                + status
+                );
+
+                // Retry temporary server/rate-limit errors
+                if (status.value() == 429
+                        || status.value() == 500
+                        || status.value() == 502
+                        || status.value() == 503
+                        || status.value() == 504) {
+
+                    if (attempt < MAX_RETRIES) {
+
+                        try {
+                            Thread.sleep(attempt * 2000L);
+                        } catch (InterruptedException interruptedException) {
+                            Thread.currentThread().interrupt();
+
+                            throw new RuntimeException(
+                                    "Gemini request was interrupted",
+                                    interruptedException
+                            );
+                        }
+
+                        continue;
+                    }
+
+                    throw new RuntimeException(
+                            "Gemini AI service is temporarily unavailable. "
+                                    + "Please try again later."
+                    );
+                }
+
                 throw new RuntimeException(
-                        "Gemini returned an empty response"
+                        "Gemini API error: "
+                                + ex.getResponseBodyAsString(),
+                        ex
                 );
             }
+        }
 
-            Object candidatesObject = response.get("candidates");
+        throw new RuntimeException(
+                "Gemini AI service is temporarily unavailable."
+        );
+    }
 
-            if (!(candidatesObject instanceof List<?> candidates)
-                    || candidates.isEmpty()) {
+    private String extractText(Map<?, ?> response) {
 
-                throw new RuntimeException(
-                        "Gemini returned no candidates: " + response
-                );
-            }
+        if (response == null) {
+            throw new RuntimeException(
+                    "Gemini returned an empty response"
+            );
+        }
 
-            Object candidateObject = candidates.get(0);
+        Object candidatesObject = response.get("candidates");
 
-            if (!(candidateObject instanceof Map<?, ?> candidate)) {
-                throw new RuntimeException(
-                        "Invalid Gemini response"
-                );
-            }
+        if (!(candidatesObject instanceof List<?> candidates)
+                || candidates.isEmpty()) {
 
-            Object contentObject = candidate.get("content");
+            throw new RuntimeException(
+                    "Gemini returned no candidates: " + response
+            );
+        }
 
-            if (!(contentObject instanceof Map<?, ?> content)) {
-                throw new RuntimeException(
-                        "Gemini response does not contain content"
-                );
-            }
+        Object candidateObject = candidates.get(0);
 
-            Object partsObject = content.get("parts");
+        if (!(candidateObject instanceof Map<?, ?> candidate)) {
+            throw new RuntimeException(
+                    "Invalid Gemini response"
+            );
+        }
 
-            if (!(partsObject instanceof List<?> parts)
-                    || parts.isEmpty()) {
+        Object contentObject = candidate.get("content");
 
-                throw new RuntimeException(
-                        "Gemini response does not contain parts"
-                );
-            }
+        if (!(contentObject instanceof Map<?, ?> content)) {
+            throw new RuntimeException(
+                    "Gemini response does not contain content"
+            );
+        }
 
-            Object partObject = parts.get(0);
+        Object partsObject = content.get("parts");
 
-            if (!(partObject instanceof Map<?, ?> part)) {
-                throw new RuntimeException(
-                        "Invalid Gemini response part"
-                );
-            }
+        if (!(partsObject instanceof List<?> parts)
+                || parts.isEmpty()) {
 
-            Object textObject = part.get("text");
+            throw new RuntimeException(
+                    "Gemini response does not contain parts"
+            );
+        }
 
-            if (textObject == null
-                    || textObject.toString().isBlank()) {
+        Object partObject = parts.get(0);
 
-                throw new RuntimeException(
-                        "Gemini returned empty content"
-                );
-            }
+        if (!(partObject instanceof Map<?, ?> part)) {
+            throw new RuntimeException(
+                    "Invalid Gemini response part"
+            );
+        }
 
-            return textObject.toString();
-        });
+        Object textObject = part.get("text");
+
+        if (textObject == null
+                || textObject.toString().isBlank()) {
+
+            throw new RuntimeException(
+                    "Gemini returned empty content"
+            );
+        }
+
+        return textObject.toString();
     }
 
     private String buildPrompt(
