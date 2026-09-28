@@ -13,7 +13,12 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/content")
 @RequiredArgsConstructor
-@CrossOrigin(origins = "http://localhost:5173")
+@CrossOrigin(
+    origins = {
+        "http://localhost:5173",
+        "https://ai-content-writer-rouge.vercel.app"
+    }
+)
 public class ContentController {
 
     private final ContentService contentService;
