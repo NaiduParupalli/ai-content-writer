@@ -26,7 +26,7 @@ interface HistoryItem extends ContentResponse {
 
 type View = "writer" | "history" | "dashboard";
 
-const API_URL = "http://localhost:8080/api/content";
+const API_URL = "https://ai-content-writer-backend-4nfa.onrender.com/api/content";
 
 function App() {
   /* =========================
