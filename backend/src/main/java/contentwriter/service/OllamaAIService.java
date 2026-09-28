@@ -15,7 +15,7 @@ public class OllamaAIService implements AIService {
             .baseUrl("https://generativelanguage.googleapis.com/v1beta")
             .build();
 
-    private final String model = "gemini-2.0-flash";
+    private final String model = "gemini-3.8-flash";
 
     @Override
     public Mono<String> generate(
